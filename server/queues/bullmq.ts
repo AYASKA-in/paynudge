@@ -481,8 +481,10 @@ export function getQueueWorkerInstance(): Worker | null {
 }
 
 // Hook into Vite's HMR disposal to clean up active resources cleanly
-if (import.meta.hot) {
-  import.meta.hot.dispose(async () => {
+// Use optional chaining on import.meta to avoid runtime crashes in CommonJS serverless environments
+const hotModule = typeof import.meta !== 'undefined' ? (import.meta as any)?.hot : undefined;
+if (hotModule) {
+  hotModule.dispose(async () => {
     console.log("🔥 [HMR] Disposing BullMQ connection resources on hot reload...");
     await closeRedisConnections();
   });
