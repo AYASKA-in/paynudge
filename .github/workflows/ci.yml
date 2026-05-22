@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, master ]
 
+env:
+  DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+
 jobs:
   validate-and-test:
     runs-on: ubuntu-latest
