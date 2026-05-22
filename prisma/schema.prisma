@@ -1,0 +1,244 @@
+// Prisma schema for PayNudge - Professional Collections SaaS OS
+// Optimized for Supabase PostgreSQL with Multi-Tenancy and Row-Level Security (RLS)
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum PaymentStatus {
+  Paid
+  Critical
+  Upcoming
+  Active
+  Partially_Paid
+  Awaiting_Settlement
+  Payment_under_Verification
+  Disputed
+  Escalated
+  Settled
+}
+
+enum ReconStatus {
+  Awaiting
+  Verified
+  Manual_Unverified
+  None
+}
+
+enum EscalationState {
+  None
+  Polite
+  First_warning
+  Legal_Threat
+  LGD_Dispute
+}
+
+enum QueueStatus {
+  PENDING
+  PROCESSING
+  RETRYING
+  FAILED
+  COMPLETED
+  DEAD_LETTER
+}
+
+model User {
+  id            String          @id @default(cuid())
+  name          String?
+  email         String          @unique
+  emailVerified DateTime?
+  image         String?
+  role          Role            @default(STAFF)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  
+  // Relations
+  businessId    String
+  business      BusinessProfile @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  accounts      Account[]
+  sessions      Session[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BusinessProfile {
+  id            String   @id @default(cuid())
+  name          String
+  vpa           String   // UPI ID
+  phone         String
+  email         String?
+  razorpayKeyId String?  // Razorpay public API key
+  razorpaySecret String? // Razorpay secret
+  metaToken     String?  // Meta WhatsApp Cloud API credentials
+  resendKey     String?  // Email API Key
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Multi-tenancy relations
+  users      User[]
+  customers  Customer[]
+  invoices   InvoiceDue[]
+  activities ActivityHistory[]
+}
+
+model Customer {
+  id            String          @id @default(cuid())
+  businessId    String
+  business      BusinessProfile @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name          String
+  phone         String
+  email         String
+  notes         String?         @db.Text
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  invoices InvoiceDue[]
+
+  @@unique([businessId, phone])
+  @@index([businessId])
+  @@index([email])
+}
+
+model InvoiceDue {
+  id                  String          @id @default(cuid())
+  businessId          String
+  business            BusinessProfile @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customerId          String
+  customer            Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  amount              Float
+  dueDate             String // YYYY-MM-DD
+  paymentStatus       PaymentStatus   @default(Active)
+  lastContactDate     String?
+  lastContactChannel  String?
+  notes               String?         @db.Text
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  // Real-world operational extensions
+  isDisputed          Boolean         @default(false)
+  disputeReason       String?         @db.Text
+  promiseToPayDate    String? // YYYY-MM-DD
+  snoozedUntil        String? // YYYY-MM-DD
+  assignedOwner       String?
+  partialAmountPaid   Float           @default(0)
+  utrCodes            String[]
+  reconciliationStatus ReconStatus    @default(None)
+  escalationState     EscalationState @default(None)
+
+  // Relations
+  reminderLogs   NotificationLog[]
+  paymentRecords PaymentRecord[]
+  queueJobs      NotificationQueue[]
+
+  @@index([businessId])
+  @@index([customerId])
+  @@index([businessId, paymentStatus])
+  @@index([businessId, dueDate])
+}
+
+model NotificationLog {
+  id         String     @id @default(cuid())
+  invoiceId  String
+  invoice    InvoiceDue @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  channel    String // 'WhatsApp' | 'Email' | 'SMS'
+  status     String // 'Sent' | 'Delivered' | 'Read' | 'Failed'
+  sentAt     DateTime   @default(now())
+  errorMessage String?  @db.Text
+  attemptNum  Int       @default(1)
+
+  @@index([invoiceId])
+  @@index([invoiceId, status])
+}
+
+model PaymentRecord {
+  id          String     @id @default(cuid())
+  invoiceId   String
+  invoice     InvoiceDue @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount      Float
+  utrCode     String?    @unique
+  method      String // 'UPI' | 'QR' | 'RAZORPAY' | 'MANUAL'
+  status      String // 'Verifying' | 'Settled' | 'Failed'
+  createdAt   DateTime   @default(now())
+
+  @@index([invoiceId])
+  @@index([invoiceId, status])
+}
+
+model NotificationQueue {
+  id         String      @id @default(cuid())
+  invoiceId  String
+  invoice    InvoiceDue  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  scheduledAt DateTime
+  topic      String // 'polite' | 'first' | 'overdue' | 'final'
+  channel    String // 'WhatsApp' | 'Email'
+  status     QueueStatus @default(PENDING)
+  attempts   Int         @default(0)
+  maxAttempts Int        @default(3)
+  lastError  String?     @db.Text
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([invoiceId])
+  @@index([scheduledAt, status])
+}
+
+model WebhookEvent {
+  id          String   @id @default(cuid())
+  provider    String // 'Razorpay' | 'Meta_WhatsApp'
+  externalId  String   @unique
+  payload     String   @db.Text
+  processed   Boolean  @default(false)
+  error       String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([provider, processed])
+}
+
+model ActivityHistory {
+  id         String          @id @default(cuid())
+  businessId String
+  business   BusinessProfile @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  action     String
+  actor      String
+  details    String?         @db.Text
+  createdAt  DateTime        @default(now())
+
+  @@index([businessId])
+  @@index([businessId, createdAt])
+}
