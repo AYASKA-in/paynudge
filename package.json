@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild api/index.ts --bundle --platform=node --format=esm --packages=external --outfile=api/index.js && node -e \"if (process.env.VERCEL === '1') { const fs = require('fs'); if (fs.existsSync('api/index.ts')) fs.unlinkSync('api/index.ts'); }\"",
     "start": "node dist/server.cjs",
     "worker": "tsx server/workers/index.ts",
     "clean": "rm -rf dist server.js",
